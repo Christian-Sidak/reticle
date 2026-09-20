@@ -2,9 +2,9 @@
  * Observe / wait / assert tools — reticle_observe, reticle_wait_for, reticle_assert, reticle_network,
  * reticle_console, reticle_animations. Split out of tools.ts; assembled back via...OBSERVE_TOOLS.
  */
-import { noteEmptyRead } from './observed-nothing.js';
+import { noteEmptyRead } from './gaps/observed-nothing.js';
 import { z } from 'zod';
-import { aliasParam } from './alias-args.js';
+import { aliasParam } from './args/alias-args.js';
 import {
   CONSOLE_ATTACH_NOTE,
   CONSOLE_LEVELS,
@@ -13,7 +13,7 @@ import {
   PredicateKind,
   Verified,
 } from '@reticlehq/core';
-import { ReticleTool } from './tool-names.js';
+import { ReticleTool } from '@reticlehq/core';
 import {
   countSchema,
   cursorSchema,
@@ -22,13 +22,17 @@ import {
   timeoutMsSchema,
   waitForTimeoutMsSchema,
   windowMsSchema,
-} from './numeric-bounds.js';
-import { buildReactionReport } from '../events/reaction.js';
-import { findContradictions } from '../events/contradictions.js';
-import { evaluatePredicate, waitForPredicate, PredicateSchema } from '../events/predicate.js';
-import { resolveSessionWithin } from '../session/resolve-within.js';
-import { WALL_CLOCK } from '../session/wall-clock.js';
-import { parsePredicate } from '../events/predicate-parse.js';
+} from './args/numeric-bounds.js';
+import { buildReactionReport } from '@reticlehq/engine/question/reaction.js';
+import { findContradictions } from '@reticlehq/engine/disagreement/contradictions.js';
+import {
+  evaluatePredicate,
+  waitForPredicate,
+  PredicateSchema,
+} from '@reticlehq/engine/question/predicate/predicate.js';
+import { resolveSessionWithin } from '@/portal/session/timing/resolve-within.js';
+import { WALL_CLOCK } from '@/portal/session/timing/wall-clock.js';
+import { parsePredicate } from '@reticlehq/engine/question/predicate/predicate-parse.js';
 import {
   matchNet,
   matchConsole,
@@ -40,39 +44,43 @@ import {
   projectNetCall,
   projectConsoleLog,
   withoutUrlRaw,
-} from '../events/event-filters.js';
+} from '@reticlehq/engine/window/event-filters.js';
 import {
   applyEventBudget,
   costHint,
   withSizeCost,
+  DEFAULT_OBSERVE_EVENT_LIMIT,
   DEFAULT_QUERY_LIMIT,
-} from '../session/output-budget.js';
+} from '@/portal/session/output-budget.js';
 import {
   annotateStarvedFailure,
   healthEnvelope,
   bufferEnvelope,
-} from '../session/session-health.js';
+} from '@/portal/session/session-health.js';
 import {
   assertsDerivedIpcStatus,
   DERIVED_IPC_STATUS_ADVICE,
   isPresenceOnlyAssertion,
   PRESENCE_ONLY_ADVICE,
-} from './assert-grade.js';
-import { assertVerdict } from './assert-verdict.js';
-import { assertionSource } from './assert-source.js';
-import { isChangeUndeclared } from '../honesty/undeclared-change.js';
-import { openSessionIntents } from '../intent/open-intents.js';
+} from './assert/assert-grade.js';
+import { assertVerdict } from './assert/assert-verdict.js';
+import { withGapNovelty } from './gap-novelty.js';
+import { assertionSource } from './assert/assert-source.js';
+import { isChangeUndeclared } from '@reticlehq/engine/evidence/undeclared-change.js';
+import { openSessionIntents } from '@/memory/intent/open-intents.js';
 import {
   dischargeInlineIntent,
   inlineVerdictId,
   linkInlineIntent,
-} from '../intent/inline-intent.js';
-import { bodiesNotCaptured } from '../honesty/uncaptured-bodies.js';
-import { bodyClauseRefusal } from '../honesty/body-capture-remedy.js';
-import { withControl } from '../session/control-envelope.js';
-import { asString, asNumber, asRecord } from './tools-helpers.js';
+} from '@/memory/intent/inline-intent.js';
+import { bodiesNotCaptured } from '@reticlehq/engine/evidence/uncaptured-bodies.js';
+import { bodyIsEvidence, type BodyMode } from '@reticlehq/engine/window/body-relevance.js';
+import { foldAssetNoise } from '@reticlehq/engine/window/asset-noise.js';
+import { bodyClauseRefusal } from '@reticlehq/engine/evidence/body-capture-remedy.js';
+import { withControl } from '@/portal/session/control-envelope.js';
+import { asNumber, asRecord, asString } from '@reticlehq/core';
 import { type ToolDef, intentArg, sessionIdShape, commandOrThrow } from './tool-kit.js';
-import { gradeOfPredicate } from './assert-grade.js';
+import { gradeOfPredicate } from './assert/assert-grade.js';
 
 /**
  * Evidence-completeness block: present on observe/network/console only when the ring buffer has
@@ -221,7 +229,7 @@ export const OBSERVE_TOOLS: ToolDef[] = [
       // Output budget: cap to the most recent N (no silent caps — droppedOldest is surfaced in cost).
       const { events: budgeted, droppedOldest } = applyEventBudget(
         filtered,
-        asNumber(args['max_events']),
+        asNumber(args['max_events']) ?? DEFAULT_OBSERVE_EVENT_LIMIT,
       );
       const report = buildReactionReport(budgeted, windowMs);
       // Run over the FILTERED-but-unbudgeted window: a contradiction must not vanish because the
@@ -324,12 +332,16 @@ export const OBSERVE_TOOLS: ToolDef[] = [
         ),
     },
     handler: async (deps, args) => {
-      const waitBudget = asNumber(args['timeout_ms']) ?? DEFAULT_ASSERT_TIMEOUT_MS;
+      const requestedMs = asNumber(args['timeout_ms']) ?? DEFAULT_ASSERT_TIMEOUT_MS;
+      // Cap each call to MCP_CALL_BUDGET_MS so the wait cannot outlast the MCP client's request
+      // timeout (SDK default 60 s, some clients lower). A larger requested budget is honoured via
+      // resume_ms: the caller re-invokes with the same predicate + since and timeout_ms: resume_ms.
+      const perCallMs = Math.min(requestedMs, MCP_CALL_BUDGET_MS);
       // Spend the budget waiting for the APP as well as for the predicate. See resolve-within.
       const session = await resolveSessionWithin(
         deps.sessions,
         asString(args['sessionId']),
-        waitBudget,
+        perCallMs,
         WALL_CLOCK,
       );
       // `until` is act_and_wait's name for this — see alias-args.ts.
@@ -340,11 +352,6 @@ export const OBSERVE_TOOLS: ToolDef[] = [
       if (bodyRefusal !== undefined) throw new Error(bodyRefusal);
       // Honesty: explicit since wins; else default to the last act's cursor; else the whole buffer.
       const since = asNumber(args['since']) ?? session.lastAct.cursor() ?? 0;
-      // Cap each call to MCP_CALL_BUDGET_MS so the wait cannot outlast the MCP client's request
-      // timeout (SDK default 60 s, some clients lower). A larger requested budget is honoured via
-      // resume_ms: the caller re-invokes with the same predicate + since and timeout_ms: resume_ms.
-      const requestedMs = asNumber(args['timeout_ms']) ?? DEFAULT_ASSERT_TIMEOUT_MS;
-      const perCallMs = Math.min(requestedMs, MCP_CALL_BUDGET_MS);
       const verdict = await waitForPredicate(session, predicate, perCallMs, since);
       const resumeMs =
         !verdict.pass && requestedMs > perCallMs ? requestedMs - perCallMs : undefined;
@@ -559,7 +566,12 @@ export const OBSERVE_TOOLS: ToolDef[] = [
         ...annotateStarvedFailure(session, verdict),
         ...(contradictions.length > 0 ? { contradictions } : {}),
         // What the app did not tell Reticle, on the same rule the act path uses.
-        ...(gaps.length > 0 ? { instrumentationGaps: gaps } : {}),
+        // Remedy once per session, facts every time. Applied HERE rather than inside
+        // assert-verdict: that file lives in `assert/`, and importing this from there added a new
+        // directory reach (and a 22nd mutual pair) that `directory-reach.test.ts` rightly refused.
+        // The filter belongs where the response is assembled anyway — telemetry above keeps the
+        // full text. See gap-novelty.ts.
+        ...(gaps.length > 0 ? { instrumentationGaps: withGapNovelty(session.id, gaps) } : {}),
         ...advice,
         ...coverage,
         // The SAME pointer the journal keeps, not a second lookup — one verdict, one file:line.
@@ -604,11 +616,17 @@ export const OBSERVE_TOOLS: ToolDef[] = [
         .describe(
           'Keep only the most recent N matching calls (older are dropped and counted in droppedOldest) — cuts tokens on a wide window. Defaults to 200 when omitted; pass a higher number for more, or scope with since/until.',
         ),
+      assets: z
+        .boolean()
+        .optional()
+        .describe(
+          "List the dev server's own successful asset GETs (modules, styles, maps, Vite plumbing). Omitted they are FOLDED into `assetsFolded {count,bytes,sample,why,how}` — measured at 68% of this tool's bytes on a real drive, carrying no verdict. A FAILED asset is never folded, and nothing folds once you filter.",
+        ),
       bodies: z
         .boolean()
         .optional()
         .describe(
-          'Include request/response bodies (default true). Pass false for a body-free listing — method, url, status, timing only — for the common "did POST /x return 200?" read. Bodies dominate the payload, so this cuts the cheap case by a large factor.',
+          'Body detail. OMITTED (the default) keeps a body only where it could decide a verdict — every failed call, every call whose outcome cannot be scored, and any call your filter named — and drops the body of a plain success nobody asked about, reporting `bodiesWithheld {count, why, how}` so the saving is never silent. `true` returns every captured body; `false` returns none, for a listing of method, url, status and timing only. Note bodies are only captured when the SDK is configured to capture them; with capture off, all three settings return the same bytes.',
         ),
       ...sessionIdShape,
     },
@@ -619,7 +637,20 @@ export const OBSERVE_TOOLS: ToolDef[] = [
         .optional()
         .describe('Total matches before `limit` — present only when capped.'),
       droppedOldest: z.number().optional().describe('How many older matches `limit` dropped.'),
-      hint: z.object({ totalInWindow: z.number(), present: z.array(z.string()) }).optional(),
+      /*
+       * `present` carries CALLS, not strings. Declared as `z.array(z.string())` it made the protocol
+       * layer reject the whole response — a dead tool call rather than a wrong answer, and only in
+       * the zero-match case this hint exists to serve. Kept in step with `netEmptyHint`, which is
+       * what actually builds it.
+       */
+      hint: z
+        .object({
+          totalInWindow: z.number(),
+          present: z.array(
+            z.object({ method: z.string(), url: z.string(), status: z.number().optional() }),
+          ),
+        })
+        .optional(),
       bodiesNotCaptured: z
         .string()
         .optional()
@@ -637,8 +668,25 @@ export const OBSERVE_TOOLS: ToolDef[] = [
       const status = asNumber(args['status']);
       const ok = 'boolean' === typeof args['ok'] ? args['ok'] : undefined;
       const limit = asNumber(args['limit']);
-      // Default true keeps the current shape; `bodies: false` returns the body-free listing (#401).
-      const bodies = 'boolean' === typeof args['bodies'] ? args['bodies'] : true;
+      /*
+       * The DEFAULT is now `auto`, which keeps a body only where it could decide a verdict.
+       *
+       * Measured on a connected drive of the bench app with capture ON, this tool returned 59,458
+       * bytes and was 90.9% of every byte that drive spent. With capture OFF — the default — the
+       * same read is 28,408 bytes and carries NO bodies at all, so this gating is inert until
+       * somebody turns capture on. "Bodies dominate the payload" was the claim that motivated it and
+       * it is wrong; the bulk is asset URLs, which `asset-noise.ts` folds. `bodies: false` already
+       * existed and would have cut the bodies —
+       * and defaulted the expensive way, which is the same defect in a different costume, because
+       * an optional saving nobody is told about is a saving nobody takes.
+       *
+       * `true` and `false` keep their exact old meanings, so a caller that already passes one is
+       * unaffected. Only the omitted case moves.
+       */
+      const bodyMode: BodyMode =
+        'boolean' === typeof args['bodies'] ? (args['bodies'] ? 'all' : 'none') : 'auto';
+      // A filter names specific calls, so under `auto` their bodies are the thing being asked about.
+      const named = method !== undefined || urlContains !== undefined || status !== undefined;
       const buffer = bufferEnvelope(session);
       // Completed calls + unresolved in-flight requests (a hung request shows as pending).
       const allNet = reconcileNet(
@@ -658,16 +706,59 @@ export const OBSERVE_TOOLS: ToolDef[] = [
         matched,
         limit ?? DEFAULT_QUERY_LIMIT,
       );
-      const calls = budgeted.map((e) => projectNetCall(e, bodies));
+      let withheld = 0;
+      const calls = budgeted.map((e) => {
+        const keep = bodyIsEvidence(
+          {
+            status: asNumber(e.data['status']) ?? asString(e.data['status']),
+            ok: 'boolean' === typeof e.data['ok'] ? e.data['ok'] : undefined,
+            method: asString(e.data['method']),
+            url: asString(e.data['url']),
+            contentType: asString(e.data['contentType']),
+          },
+          bodyMode,
+          { named },
+        );
+        if (
+          !keep &&
+          (e.data['responseBody'] !== undefined || e.data['requestBody'] !== undefined)
+        ) {
+          withheld += 1;
+        }
+        return projectNetCall(e, keep);
+      });
       // A zero-match FILTER already reports what did fire (netEmptyHint above). Zero calls at all
       // fell through as a bare `[]`, which is indistinguishable from an observer that is not
       // recording — and those need opposite responses. Say the look happened.
+      /*
+       * Fold the bundler's own traffic unless the caller asked for it or filtered for something.
+       * A filter means they are asking about particular calls, and answering a narrowed question
+       * with a summary is refusing it.
+       */
+      const wantAssets = 'boolean' === typeof args['assets'] ? args['assets'] : false;
+      const { calls: listed, folded } = foldAssetNoise(calls, { folding: !wantAssets && !named });
       return withSizeCost(
         noteEmptyRead(
           {
-            calls,
+            calls: listed,
             ...(droppedOldest > 0 ? { total: matched.length, droppedOldest } : {}),
-            ...(bodies ? bodiesNotCaptured(calls, session.sdkVersion) : {}),
+            ...('none' !== bodyMode ? bodiesNotCaptured(calls, session.sdkVersion) : {}),
+            /*
+             * Never silent. The agent has to be able to tell "this call had no body" from "the body
+             * is here and you were not shown it", and to know the exact way to get it — otherwise
+             * this is a capability that degrades without saying so, which is the failure mode that
+             * cost this project a feature that looked wired and was inert.
+             */
+            ...(folded !== undefined ? { assetsFolded: folded } : {}),
+            ...(withheld > 0
+              ? {
+                  bodiesWithheld: {
+                    count: withheld,
+                    why: 'these calls SUCCEEDED and no filter named them, so their bodies could not change a verdict. Status, method, url, timing and responseSize are all above.',
+                    how: 'pass bodies:true for every body, or name the call you mean (urlContains / method / status) to get just that one.',
+                  },
+                }
+              : {}),
             ...buffer,
           },
           'calls',

@@ -4,8 +4,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import { z, type ZodTypeAny } from 'zod';
-import { ReticleTool } from './tool-names.js';
-import { RAW_TOOLS, TOOLS } from './tools.js';
+import { ReticleTool } from '@reticlehq/core';
+import { RAW_TOOLS, TOOLS } from '@/surface/tools/tools.js';
 import {
   MAX_BLOCKING_WAIT_MS,
   MAX_RESULT_COUNT,

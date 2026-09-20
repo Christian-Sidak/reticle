@@ -12,13 +12,14 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionState, Verified } from '@reticlehq/core';
-import { LastAct } from '../session/last-act.js';
-import { decideVerified } from '../honesty/verified.js';
-import { buildHonestyBlock, HonestyGrade } from '../honesty/honesty.js';
-import { MCP_CALL_BUDGET_MS } from './numeric-bounds.js';
-import { TOOLS, type ToolDef, type ToolDeps } from './tools.js';
-import { ReticleTool } from './tool-names.js';
-import type { Session, SessionManager } from '../session/session.js';
+import { LastAct } from '@/portal/session/last-act.js';
+import { decideVerified } from '@reticlehq/engine/evidence/verified.js';
+import { buildHonestyBlock, HonestyGrade } from '@reticlehq/engine/evidence/honesty.js';
+import { MCP_CALL_BUDGET_MS } from './args/numeric-bounds.js';
+import { TOOLS, type ToolDef, type ToolDeps } from '@/surface/tools/tools.js';
+import { ReticleTool } from '@reticlehq/core';
+import type { Session } from '@/portal/session/session.js';
+import type { SessionManager } from '@/portal/session/session-manager.js';
 
 function makeDeps(): ToolDeps {
   const session: Partial<Session> = {
