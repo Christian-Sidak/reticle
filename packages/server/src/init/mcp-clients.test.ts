@@ -224,6 +224,48 @@ describe('codex', () => {
   });
 });
 
+/**
+ * Project-scope `.mcp.json` — the fallback when the `claude` CLI is not on PATH.
+ *
+ * Issue #1071: `init` registered Gemini and Codex but silently omitted Claude Code when the `claude`
+ * binary was absent (e.g. inside a VS Code extension session). The fix writes `.mcp.json` at the
+ * project root with the same `mcpServers` shape the user hand-crafted as a workaround.
+ */
+describe('claude-code-project writes project-scope .mcp.json', () => {
+  const spec = clientSpec(McpClient.CLAUDE_CODE_PROJECT);
+
+  it('is project-scoped at .mcp.json, not the user home', () => {
+    expect(spec.scope).toBe(ConfigScope.PROJECT);
+    expect(spec.relPath).toBe('.mcp.json');
+  });
+
+  it('uses the mcpServers key and the same command/args shape as Cursor', () => {
+    expect(spec.serversKey).toBe('mcpServers');
+    const result = mergeClientConfig(spec, null);
+    expect(result.status).toBe(ClientMergeStatus.APPLY);
+    const parsed = JSON.parse(result.content) as Record<string, unknown>;
+    const entry = (parsed['mcpServers'] as Record<string, unknown>)[MCP_SERVER_NAME] as Record<
+      string,
+      unknown
+    >;
+    expect(entry['command']).toBe('npx');
+    expect(entry['args']).toEqual(['@reticlehq/server', 'mcp']);
+  });
+
+  it('does not collide with Cursor, which also writes a project-scoped file', () => {
+    // Both use project scope but different paths — a collision would mean writing one client's
+    // content into another client's file.
+    const cursor = clientSpec(McpClient.CURSOR);
+    expect(spec.relPath).not.toBe(cursor.relPath);
+  });
+
+  it('is idempotent — a second run sees ALREADY, not APPLY', () => {
+    const first = mergeClientConfig(spec, null);
+    const second = mergeClientConfig(spec, first.content);
+    expect(second.status).toBe(ClientMergeStatus.ALREADY);
+  });
+});
+
 describe('every client can produce a paste-able snippet', () => {
   it('so a client we cannot write is still actionable', () => {
     for (const spec of MCP_CLIENTS) {

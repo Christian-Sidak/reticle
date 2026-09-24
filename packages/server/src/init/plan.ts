@@ -139,6 +139,8 @@ export function frameworkPackages(
 
 /** Exported so the init telemetry can tell an MCP-registration failure from a dependency install. */
 export const MCP_TARGET = 'global (claude user scope)';
+/** Project-scope `.mcp.json` written when the `claude` CLI is absent. */
+export const CLAUDE_CODE_MCP_JSON = '.mcp.json';
 
 /** The step that runs the package manager — the other thing that commonly fails on a user's machine. */
 export const DEPS_TARGET = 'package.json';
@@ -205,6 +207,13 @@ export interface PlanInput {
   claudeCli: boolean;
   /** Whether an `reticle` MCP server is already registered with Claude (any scope) — idempotency. */
   mcpExists: boolean;
+  /**
+   * Existing `.mcp.json` content at the project root, or null when absent.
+   *
+   * Read for idempotency: when the `claude` CLI is not on PATH the project-scope `.mcp.json` is
+   * written instead, and a re-run must not overwrite a correct file.
+   */
+  claudeCodeProjectMcp?: string | null | undefined;
   /** `process.platform`. Injected so this module stays pure. Windows is the only branch. */
   platform?: string;
   /** Whether THIS project has a .cursor/ directory — the signal that Cursor works on this repo. */
@@ -334,6 +343,7 @@ function agentFile(input: PlanInput, relPath: string): string {
 }
 
 const CLAUDE_MCP_TITLE = 'MCP server (Claude, global)';
+const CLAUDE_CODE_PROJECT_TITLE = 'MCP server (Claude Code, project)';
 
 function claudeMcpStep(input: PlanInput): Step | null {
   if (!input.claudeCli) return null;
@@ -352,6 +362,46 @@ function claudeMcpStep(input: PlanInput): Step | null {
     status: StepStatus.APPLY,
     detail: 'register reticle globally for all projects',
     exec: { command: cmd.command, args: cmd.args, fallback: cmd.display },
+  };
+}
+
+/**
+ * Project-scope `.mcp.json` — the fallback when the `claude` CLI is not on PATH.
+ *
+ * Never silently omit the Claude Code step. When the CLI is absent (e.g. a VS Code extension
+ * session where `claude` has not been added to PATH) write `.mcp.json` at the project root so the
+ * tools appear without a global user-scope registration. This is the exact workaround reported in
+ * issue #1071: `command: "npx", args: ["@reticlehq/server", "mcp"]`.
+ *
+ * Returns null when the CLI IS present — in that case the global step above is preferred and the
+ * project file is not needed.
+ */
+function claudeCodeProjectStep(input: PlanInput): Step | null {
+  if (input.claudeCli) return null;
+  const spec = clientSpec(McpClient.CLAUDE_CODE_PROJECT);
+  const merged = mergeClientConfig(spec, input.claudeCodeProjectMcp ?? null);
+  if (merged.status === ClientMergeStatus.ALREADY) {
+    return {
+      title: CLAUDE_CODE_PROJECT_TITLE,
+      target: CLAUDE_CODE_MCP_JSON,
+      status: StepStatus.ALREADY,
+      detail: 'reticle already in .mcp.json (project scope)',
+    };
+  }
+  if (merged.status === ClientMergeStatus.MANUAL) {
+    return {
+      title: CLAUDE_CODE_PROJECT_TITLE,
+      target: CLAUDE_CODE_MCP_JSON,
+      status: StepStatus.MANUAL,
+      detail: `add this to ${CLAUDE_CODE_MCP_JSON} by hand:\n${clientSnippet(spec)}`,
+    };
+  }
+  return {
+    title: CLAUDE_CODE_PROJECT_TITLE,
+    target: CLAUDE_CODE_MCP_JSON,
+    status: StepStatus.APPLY,
+    detail: 'register reticle with Claude Code (project scope — no claude CLI found on PATH)',
+    write: { path: CLAUDE_CODE_MCP_JSON, content: merged.content },
   };
 }
 
@@ -596,7 +646,9 @@ interface AgentIntegration {
 const AGENT_INTEGRATIONS: readonly AgentIntegration[] = [
   {
     id: AgentId.CLAUDE,
-    mcpStep: claudeMcpStep,
+    // `claudeMcpStep` handles the CLI (global) path; `claudeCodeProjectStep` handles the no-CLI
+    // (project-scope .mcp.json) fallback. Exactly one returns a step for any given input.
+    mcpStep: (input) => claudeMcpStep(input) ?? claudeCodeProjectStep(input),
     ruleStep: claudeRuleStep,
     commandStep: claudeCommandStep,
   },

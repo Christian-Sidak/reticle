@@ -49,6 +49,7 @@ function readPairingToken(): string {
 import {
   DEPS_TARGET,
   RETICLE_CONFIG_FILE,
+  CLAUDE_CODE_MCP_JSON,
   frameworkPackages,
   MCP_TARGET,
   buildPlan,
@@ -480,6 +481,8 @@ function gatherPlanInput(options: InitOptions, io: InitIo, pkgRaw: string): Plan
     // The CONTENT, so a config that exists can be checked rather than trusted — a `"port"` set to
     // the app's own dev-server port used to survive every re-run of `init`.
     reticleConfigSource: io.readFile(RETICLE_CONFIG_FILE),
+    // Read for idempotency: the project-scope .mcp.json is written when the claude CLI is absent.
+    claudeCodeProjectMcp: io.readFile(CLAUDE_CODE_MCP_JSON),
     // Read the agent instruction files so the rule merge stays idempotent across re-runs — from the
     // agent's own root, or the merge would idempotently check a file it is not going to write.
     claudeMdContent: io.readFile(agentFile('CLAUDE.md')),

@@ -213,11 +213,22 @@ describe('buildPlan — MCP (global, per detected agent)', () => {
     expect(step(plan, CURSOR_STEP).status).toBe(StepStatus.ALREADY);
   });
 
-  it('falls back to a single manual step when no agent is detected', () => {
+  /**
+   * Previously fell back to a generic MANUAL step with `mcpManual()` text.
+   *
+   * The fix for issue #1071: when the `claude` CLI is absent the plan now writes a project-scope
+   * `.mcp.json` instead. This is the exact workaround the user hand-crafted — the step is no
+   * longer silently omitted, and the plan is always actionable without requiring a CLI.
+   */
+  it('writes .mcp.json (project scope) when no claude CLI is found', () => {
+    const CLAUDE_CODE_PROJECT_STEP = 'MCP server (Claude Code, project)';
     const plan = buildPlan(input({ claudeCli: false }));
-    const s = step(plan, MCP_STEP);
-    expect(s.status).toBe(StepStatus.MANUAL);
-    expect(s.detail).toContain('-s user');
+    const s = step(plan, CLAUDE_CODE_PROJECT_STEP);
+    expect(s.status).toBe(StepStatus.APPLY);
+    expect(s.write?.path).toBe('.mcp.json');
+    expect(s.write?.content).toContain('@reticlehq/server');
+    // The old generic manual step must not appear — the named project step replaces it.
+    expect(maybeStep(plan, MCP_STEP)).toBeUndefined();
   });
 
   it('skips under --no-mcp', () => {
@@ -263,10 +274,14 @@ describe('buildPlan — MCP (global, per detected agent)', () => {
     expect(maybeStep(plan, WINDOWS_MCP_STEP)).toBeUndefined();
   });
 
-  it('does not duplicate the Windows fallback when the manual step already carries it', () => {
+  it('prints the Windows cmd note alongside the project .mcp.json step on Windows', () => {
+    // When the CLI is absent we write .mcp.json (project scope). That step IS an actionable step,
+    // so the Windows MCP spawn notice is still shown beside it — the user needs both.
     const plan = buildPlan(input({ claudeCli: false, platform: NodePlatform.WINDOWS }));
-    expect(maybeStep(plan, WINDOWS_MCP_STEP)).toBeUndefined();
-    expect(step(plan, MCP_STEP).detail).toContain('cmd');
+    const windowsNote = maybeStep(plan, WINDOWS_MCP_STEP);
+    expect(windowsNote).toBeDefined();
+    expect(windowsNote?.status).toBe(StepStatus.NOTICE);
+    expect(windowsNote?.detail).toContain('cmd');
   });
 
   it('keeps both agents’ registration portless — the port lives in .reticle.json, not the global config', () => {

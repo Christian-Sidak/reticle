@@ -22,6 +22,7 @@ import { NPX, MCP_SERVER_NAME, npxServerArgs, isReticleRegistration } from './mc
 
 export const McpClient = {
   CLAUDE_CODE: 'claude-code',
+  CLAUDE_CODE_PROJECT: 'claude-code-project',
   CURSOR: 'cursor',
   WINDSURF: 'windsurf',
   OPENCODE: 'opencode',
@@ -86,6 +87,29 @@ export const MCP_CLIENTS: readonly ClientSpec[] = [
     serversKey: 'mcpServers',
     entry: commandArgsEntry,
     docs: 'registered via `claude mcp add -s user` — see init/mcp.ts',
+  },
+  {
+    id: McpClient.CLAUDE_CODE_PROJECT,
+    label: 'Claude Code (project)',
+    /**
+     * Project-scope `.mcp.json` — the fallback when the `claude` CLI is not on PATH.
+     *
+     * Claude Code also reads a `.mcp.json` at the project root (project scope). This is the shape
+     * the workaround in issue #1071 used: `command: "npx", args: ["@reticlehq/server", "mcp"]`.
+     * It is written when the `claude` binary is absent — e.g., inside a VS Code extension session
+     * where the CLI has not been added to PATH — so the tools appear without requiring a global
+     * user-scope registration.
+     *
+     * Global registration is still preferred when the CLI is available, because one entry serves
+     * every project and `.mcp.json` is typically gitignored or not committed. This entry is the
+     * named fallback so the step is never silently omitted from the plan.
+     */
+    scope: ConfigScope.PROJECT,
+    relPath: '.mcp.json',
+    format: ConfigFormat.JSON,
+    serversKey: 'mcpServers',
+    entry: commandArgsEntry,
+    docs: 'Claude Code project-scope MCP — .mcp.json at the project root, `mcpServers` key',
   },
   {
     id: McpClient.CURSOR,

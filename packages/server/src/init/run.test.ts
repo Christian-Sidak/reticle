@@ -313,11 +313,15 @@ describe('runInit', () => {
     expect(io.execCalls.some((c) => 'claude' === c.command)).toBe(false);
   });
 
-  it('prints manual global instructions when no agent is detected', () => {
+  /**
+   * When the `claude` CLI is absent, init now writes a project-scope `.mcp.json` instead of
+   * printing a generic manual instruction. This was the exact workaround in issue #1071.
+   */
+  it('writes .mcp.json when no claude CLI is found (project-scope fallback)', () => {
     const io = memoryIo(VITE_FILES, { claudeAvailable: false, cursor: false });
     runInit(OPTS, io);
     expect(io.execCalls.some((c) => 'claude' === c.command && c.args.includes('add'))).toBe(false);
-    expect(io.lines.join('\n')).toContain('-s user');
+    expect(io.written['.mcp.json']).toContain('@reticlehq/server');
   });
 
   it('registers in Cursor global config when Cursor is present', () => {
